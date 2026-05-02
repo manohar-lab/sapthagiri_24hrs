@@ -1,5 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 websockets
 faster-whisper>=1.0.0
 edge-tts
@@ -7,3 +7,23 @@ langchain
 langchain-openai
 python-dotenv
 pydantic
+openai
+
+# System automation
+pyautogui
+pillow  # Required by pyautogui for screenshots
+pyperclip  # Clipboard operations
+
+# Windows audio control
+pycaw
+comtypes
+
+# WhatsApp automation
+pywhatkit
+
+# Browser automation
+selenium
+webdriver-manager  # Auto-manage browser drivers
+psutil  # Process detection for app launcher
+
+

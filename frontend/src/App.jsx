@@ -7,6 +7,7 @@ export default function App() {
   const [textInput, setTextInput] = useState('');
   
   const wsRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const audioQueueRef = useRef([]);
@@ -20,43 +21,56 @@ export default function App() {
 
   // WebSocket Connection
   useEffect(() => {
+    const connectWebSocket = () => {
+      const ws = new WebSocket('ws://localhost:8000/ws');
+      
+      ws.onopen = () => {
+        console.log('Connected to Agent Server');
+        setStatus('idle');
+      };
+
+      ws.onmessage = async (event) => {
+        if (typeof event.data === 'string') {
+          let msg;
+          try {
+            msg = JSON.parse(event.data);
+          } catch {
+            return;
+          }
+          if (msg.type === 'status') {
+            setStatus(msg.status);
+          } else if (msg.type === 'text') {
+            setMessages(prev => [...prev, { role: msg.speaker, text: msg.text }]);
+          }
+        } else if (event.data instanceof Blob) {
+          // Handle incoming audio (TTS)
+          const audioBlob = new Blob([event.data], { type: 'audio/mp3' });
+          const audioUrl = URL.createObjectURL(audioBlob);
+          audioQueueRef.current.push(audioUrl);
+          playNextAudio();
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('Disconnected from Server');
+        setStatus('idle');
+        reconnectTimerRef.current = setTimeout(connectWebSocket, 3000); // Reconnect
+      };
+
+      ws.onerror = (err) => {
+        console.error('WebSocket error', err);
+      };
+
+      wsRef.current = ws;
+    };
+
     connectWebSocket();
+    
     return () => {
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (wsRef.current) wsRef.current.close();
     };
   }, []);
-
-  const connectWebSocket = () => {
-    const ws = new WebSocket('ws://localhost:8000/ws');
-    
-    ws.onopen = () => {
-      console.log('Connected to Agent Server');
-      setStatus('idle');
-    };
-
-    ws.onmessage = async (event) => {
-      if (typeof event.data === 'string') {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'status') {
-          setStatus(msg.status);
-        } else if (msg.type === 'text') {
-          setMessages(prev => [...prev, { role: msg.speaker, text: msg.text }]);
-        }
-      } else if (event.data instanceof Blob) {
-        // Handle incoming audio (TTS)
-        const audioUrl = URL.createObjectURL(event.data);
-        audioQueueRef.current.push(audioUrl);
-        playNextAudio();
-      }
-    };
-
-    ws.onclose = () => {
-      console.log('Disconnected from Server');
-      setTimeout(connectWebSocket, 3000); // Reconnect
-    };
-
-    wsRef.current = ws;
-  };
 
   const playNextAudio = () => {
     if (currentAudioRef.current && !currentAudioRef.current.ended) return;
@@ -66,7 +80,10 @@ export default function App() {
     const audio = new Audio(audioUrl);
     currentAudioRef.current = audio;
     
-    audio.play();
+    audio.play().catch((err) => {
+      console.warn('Audio play interrupted', err);
+      setStatus('idle');
+    });
     setStatus('speaking');
     
     audio.onended = () => {
@@ -143,13 +160,15 @@ export default function App() {
   const handleTextSubmit = (e) => {
     e.preventDefault();
     if (!textInput.trim()) return;
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      setMessages(prev => [...prev, { role: 'agent', text: 'Server disconnected. Reconnecting, please retry in a moment.' }]);
+      return;
+    }
     
     if (status === 'speaking') handleInterrupt();
     
     setMessages(prev => [...prev, { role: 'user', text: textInput }]);
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'user_message', text: textInput }));
-    }
+    wsRef.current.send(JSON.stringify({ type: 'user_message', text: textInput }));
     setTextInput('');
     setStatus('thinking');
   };

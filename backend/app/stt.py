@@ -1,8 +1,12 @@
 import io
+import asyncio
 import wave
 from faster_whisper import WhisperModel
 import tempfile
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Transcriber:
     def __init__(self, model_size="base"):
@@ -13,16 +17,25 @@ class Transcriber:
     async def transcribe(self, audio_bytes: bytes) -> str:
         """
         Transcribes audio bytes to text using faster-whisper.
-        Assumes audio is 16kHz mono WAV.
+        Accepts browser-recorded audio (typically webm/opus) and wav.
         """
-        # Save bytes to a temporary file since faster_whisper needs a file path or file-like object
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
+        # MediaRecorder usually sends webm/opus; choose suffix by header for decoder compatibility.
+        suffix = ".wav" if audio_bytes[:4] == b"RIFF" else ".webm"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_audio:
             temp_audio.write(audio_bytes)
             temp_path = temp_audio.name
             
         try:
-            segments, info = self.model.transcribe(temp_path, beam_size=5)
-            text = "".join([segment.text for segment in segments])
-            return text.strip()
+            def _run_sync():
+                segments, info = self.model.transcribe(temp_path, beam_size=5)
+                return "".join([segment.text for segment in segments])
+            
+            text = await asyncio.to_thread(_run_sync)
+            text = text.strip()
+            logger.info(f"[STT] Transcribed: '{text}'")
+            return text
+        except Exception as e:
+            logger.error(f"STT transcription failed: {e}")
+            return ""
         finally:
             os.remove(temp_path)
