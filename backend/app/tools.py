@@ -76,23 +76,139 @@ def search_info(query: str) -> str:
     """Searches the web for information (mock)."""
     return f"Search results for '{query}': Example search result data."
 
-def open_browser(query: str) -> str:
-    """Opens a website or performs a Google search in the default browser."""
+# ── Site-specific search URL builders ────────────────────────────────────────
+
+SITE_SEARCH_URLS = {
+    "flipkart": "https://www.flipkart.com/search?q={query}",
+    "amazon": "https://www.amazon.in/s?k={query}",
+    "amazon india": "https://www.amazon.in/s?k={query}",
+    "youtube": "https://www.youtube.com/results?search_query={query}",
+    "google": "https://www.google.com/search?q={query}",
+    "meesho": "https://www.meesho.com/search?q={query}",
+    "myntra": "https://www.myntra.com/{query}",
+    "snapdeal": "https://www.snapdeal.com/search?keyword={query}",
+    "nykaa": "https://www.nykaa.com/search/result/?q={query}",
+    "swiggy": "https://www.swiggy.com/search?query={query}",
+    "zomato": "https://www.zomato.com/search?q={query}",
+    "github": "https://github.com/search?q={query}",
+    "stackoverflow": "https://stackoverflow.com/search?q={query}",
+    "wikipedia": "https://en.wikipedia.org/w/index.php?search={query}",
+    "twitter": "https://twitter.com/search?q={query}",
+    "x": "https://x.com/search?q={query}",
+    "linkedin": "https://www.linkedin.com/search/results/all/?keywords={query}",
+    "reddit": "https://www.reddit.com/search/?q={query}",
+    "ebay": "https://www.ebay.com/sch/i.html?_nkw={query}",
+    "blinkit": "https://blinkit.com/s/?q={query}",
+    "bigbasket": "https://www.bigbasket.com/ps/?q={query}",
+}
+
+SITE_HOME_URLS = {
+    "flipkart": "https://www.flipkart.com",
+    "amazon": "https://www.amazon.in",
+    "youtube": "https://www.youtube.com",
+    "google": "https://www.google.com",
+    "meesho": "https://www.meesho.com",
+    "myntra": "https://www.myntra.com",
+    "snapdeal": "https://www.snapdeal.com",
+    "nykaa": "https://www.nykaa.com",
+    "swiggy": "https://www.swiggy.com",
+    "zomato": "https://www.zomato.com",
+    "github": "https://github.com",
+    "twitter": "https://twitter.com",
+    "x": "https://x.com",
+    "linkedin": "https://www.linkedin.com",
+    "reddit": "https://www.reddit.com",
+    "ebay": "https://www.ebay.com",
+    "netflix": "https://www.netflix.com",
+    "hotstar": "https://www.hotstar.com",
+    "primevideo": "https://www.primevideo.com",
+    "spotify": "https://open.spotify.com",
+    "whatsapp": "https://web.whatsapp.com",
+    "gmail": "https://mail.google.com",
+    "outlook": "https://outlook.live.com",
+    "maps": "https://maps.google.com",
+    "google maps": "https://maps.google.com",
+}
+
+
+def search_on_site(site: str, query: str) -> str:
+    """
+    Searches for a query on a specific website (e.g., Flipkart, Amazon, YouTube).
+    Constructs the correct search URL and opens it in the default browser.
+    """
     import urllib.parse
-    query = query.lower().strip()
-    if "youtube" in query:
-        url, name = "https://www.youtube.com", "YouTube"
-    elif "google" in query and "search" not in query:
-        url, name = "https://www.google.com", "Google"
-    elif "." in query and " " not in query:
-        url = f"https://{query}" if not query.startswith("http") else query
-        name = query
+    site_key = site.lower().strip()
+    encoded_query = urllib.parse.quote(query)
+
+    # Check if we have a known search URL template for this site
+    search_template = SITE_SEARCH_URLS.get(site_key)
+    if search_template:
+        url = search_template.replace("{query}", encoded_query)
+        display_name = site.title()
     else:
-        url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-        name = f"Google Search for '{query}'"
+        # Fallback: Google search scoped to the site
+        url = f"https://www.google.com/search?q=site:{site_key}.com+{encoded_query}"
+        display_name = site.title()
+
     try:
         webbrowser.open(url)
-        return f"Successfully opened {name} in your browser."
+        logger.info(f"Opened search: {url}")
+        return f"Searching for '{query}' on {display_name}. Opening results now."
+    except Exception as e:
+        logger.error(f"search_on_site failed: {e}")
+        return f"Failed to open search: {e}"
+
+
+def open_browser(query: str) -> str:
+    """Opens a website or performs a Google/site search in the default browser."""
+    import urllib.parse
+    import re
+    raw = query.strip()
+    lower = raw.lower()
+
+    # Detect "search for X on SITE" or "search X on SITE" patterns
+    match = re.search(
+        r'search(?:\s+for)?\s+(.+?)\s+on\s+([a-z0-9 ]+)',
+        lower
+    )
+    if match:
+        search_query = match.group(1).strip()
+        site_name = match.group(2).strip()
+        return search_on_site(site_name, search_query)
+
+    # Detect "open SITE and search for X" pattern
+    match2 = re.search(
+        r'open\s+([a-z0-9 ]+?)\s+and\s+search(?:\s+for)?\s+(.+)',
+        lower
+    )
+    if match2:
+        site_name = match2.group(1).strip()
+        search_query = match2.group(2).strip()
+        return search_on_site(site_name, search_query)
+
+    # Check for known site home pages
+    for site_key, home_url in SITE_HOME_URLS.items():
+        if site_key in lower and len(lower.split()) <= 3:
+            try:
+                webbrowser.open(home_url)
+                return f"Successfully opened {site_key.title()} in your browser."
+            except Exception as e:
+                return f"Failed to open browser: {e}"
+
+    # Plain URL
+    if "." in raw and " " not in raw:
+        url = f"https://{raw}" if not raw.startswith("http") else raw
+        try:
+            webbrowser.open(url)
+            return f"Successfully opened {raw} in your browser."
+        except Exception as e:
+            return f"Failed to open browser: {e}"
+
+    # Google search fallback
+    url = f"https://www.google.com/search?q={urllib.parse.quote(raw)}"
+    try:
+        webbrowser.open(url)
+        return f"Searching Google for '{raw}'."
     except Exception as e:
         return f"Failed to open browser: {e}"
 
@@ -193,7 +309,7 @@ def control_volume(action: str, percent: int = 10, level: float = None) -> str:
 def open_app(app_name: str) -> str:
     """Launches an application by name on Windows."""
     try:
-        app_lower = app_name.lower()
+        app_lower = app_name.lower().strip()
         
         # Common application mappings
         app_map = {
@@ -216,15 +332,25 @@ def open_app(app_name: str) -> str:
             'terminal': 'wt.exe',
             'spotify': 'spotify.exe',
             'discord': 'discord.exe',
+            'task manager': 'taskmgr.exe',
+            'word': 'winword.exe',
+            'microsoft word': 'winword.exe',
+            'excel': 'excel.exe',
+            'powerpoint': 'powerpnt.exe',
         }
         
-        target = app_map.get(app_lower, app_name)
+        target = app_map.get(app_lower, app_name.strip())
         
         # Try to launch
         if platform.system().lower() == "windows":
             import os
-            # os.startfile is more reliable for URI schemes and installed apps
-            os.startfile(target)
+            import subprocess
+            try:
+                # os.startfile is more reliable for URI schemes and installed apps
+                os.startfile(target)
+            except Exception:
+                # Robust fallback for Settings and URI schemes
+                subprocess.Popen(f'start "" "{target}"', shell=True)
         else:
             subprocess.Popen([target], shell=False)
             
@@ -588,6 +714,7 @@ AVAILABLE_TOOLS = {
     "send_email": send_email,
     "search_info": search_info,
     "open_browser": open_browser,
+    "search_on_site": search_on_site,
     "take_screenshot": take_screenshot,
     "control_volume": control_volume,
     "open_app": open_app,
@@ -657,13 +784,34 @@ TOOLS_SCHEMA = [
         "type": "function",
         "function": {
             "name": "open_browser",
-            "description": "Opens a website or performs a Google search in the default browser.",
+            "description": "Opens a website or performs a Google search. Also handles 'search for X on SITE' patterns automatically.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Website name, URL, or search query"}
+                    "query": {"type": "string", "description": "Website name, URL, or search query (e.g. 'flipkart', 'search for laptop on amazon')"}
                 },
                 "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_on_site",
+            "description": "Searches for something on a specific website like Flipkart, Amazon, YouTube, Meesho, Myntra, etc. Use this when the user says 'search for X on Flipkart' or 'find laptops on Amazon' or 'search YouTube for music'. This is the PRIMARY tool for in-site searches.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "site": {
+                        "type": "string",
+                        "description": "The website to search on (e.g., 'flipkart', 'amazon', 'youtube', 'meesho', 'myntra', 'snapdeal')"
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "The search term to look for (e.g., 'laptop', 'red dress', 'hindi songs')"
+                    }
+                },
+                "required": ["site", "query"]
             }
         }
     },

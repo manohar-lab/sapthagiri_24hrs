@@ -12,14 +12,7 @@ export default function App() {
   const audioChunksRef = useRef([]);
   const audioQueueRef = useRef([]);
   const currentAudioRef = useRef(null);
-  const messagesEndRef = useRef(null);
 
-  // Auto-scroll
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  // WebSocket Connection
   useEffect(() => {
     const connectWebSocket = () => {
       const ws = new WebSocket('ws://localhost:8000/ws');
@@ -43,7 +36,6 @@ export default function App() {
             setMessages(prev => [...prev, { role: msg.speaker, text: msg.text }]);
           }
         } else if (event.data instanceof Blob) {
-          // Handle incoming audio (TTS)
           const audioBlob = new Blob([event.data], { type: 'audio/mp3' });
           const audioUrl = URL.createObjectURL(audioBlob);
           audioQueueRef.current.push(audioUrl);
@@ -54,11 +46,7 @@ export default function App() {
       ws.onclose = () => {
         console.log('Disconnected from Server');
         setStatus('idle');
-        reconnectTimerRef.current = setTimeout(connectWebSocket, 3000); // Reconnect
-      };
-
-      ws.onerror = (err) => {
-        console.error('WebSocket error', err);
+        reconnectTimerRef.current = setTimeout(connectWebSocket, 3000);
       };
 
       wsRef.current = ws;
@@ -73,20 +61,20 @@ export default function App() {
   }, []);
 
   const playNextAudio = () => {
-    if (currentAudioRef.current && !currentAudioRef.current.ended) return;
+    if (currentAudioRef.current && !currentAudioRef.current.paused && !currentAudioRef.current.ended) return;
     if (audioQueueRef.current.length === 0) return;
 
     const audioUrl = audioQueueRef.current.shift();
-    const audio = new Audio(audioUrl);
-    currentAudioRef.current = audio;
+    currentAudioRef.current.src = audioUrl;
     
-    audio.play().catch((err) => {
+    currentAudioRef.current.play().then(() => {
+      setStatus('speaking');
+    }).catch((err) => {
       console.warn('Audio play interrupted', err);
       setStatus('idle');
     });
-    setStatus('speaking');
     
-    audio.onended = () => {
+    currentAudioRef.current.onended = () => {
       setStatus('idle');
       playNextAudio();
     };
@@ -95,7 +83,6 @@ export default function App() {
   const stopAudio = () => {
     if (currentAudioRef.current) {
       currentAudioRef.current.pause();
-      currentAudioRef.current = null;
     }
     audioQueueRef.current = [];
   };
@@ -107,6 +94,7 @@ export default function App() {
     
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
@@ -119,7 +107,6 @@ export default function App() {
 
       mediaRecorder.onstop = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        // Send to backend via WebSocket
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           wsRef.current.send(audioBlob);
         }
@@ -173,23 +160,38 @@ export default function App() {
     setStatus('thinking');
   };
 
+  const recentMessages = messages.slice(-3);
+
   return (
     <div className="app-container">
+      <audio ref={currentAudioRef} hidden />
+      
       <div className="header">
-        <h1>Nova Agent</h1>
+        <h1>Nova AI</h1>
         <div className={`status-indicator status-${status}`}>
           <div className="dot"></div>
-          {status === 'idle' ? 'Ready' : status.charAt(0).toUpperCase() + status.slice(1)}
+          {status === 'idle' ? 'Ready' : status.toUpperCase()}
         </div>
       </div>
 
-      <div className="chat-area">
-        {messages.map((msg, idx) => (
-          <div key={idx} className={`message ${msg.role}`}>
-            {msg.text}
-          </div>
-        ))}
-        <div ref={messagesEndRef} />
+      <div className="lyrics-display">
+        <div className="lyrics-text-area">
+          {recentMessages.length === 0 ? (
+            <div className="lyric-main agent animate-pulse">Awaiting your command...</div>
+          ) : (
+            recentMessages.map((msg, idx) => {
+              const isLast = idx === recentMessages.length - 1;
+              return (
+                <div 
+                  key={idx} 
+                  className={`lyric-line ${msg.role} ${isLast ? 'lyric-main' : 'lyric-fade'}`}
+                >
+                  {msg.text}
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
 
       <div className="controls">
@@ -216,7 +218,7 @@ export default function App() {
         <form className="input-fallback" onSubmit={handleTextSubmit}>
           <input 
             type="text" 
-            placeholder="Type a message or use the mic..." 
+            placeholder="TYPE MESSAGE OR USE MIC..." 
             value={textInput}
             onChange={(e) => setTextInput(e.target.value)}
           />
@@ -226,3 +228,4 @@ export default function App() {
     </div>
   );
 }
+
