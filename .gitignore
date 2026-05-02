@@ -1,21 +1,17 @@
-# Environments
-venv/
-backend/venv/
-env/
-.env
-
-# Node
-node_modules/
-frontend/node_modules/
-dist/
-
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.pytest_cache/
+venv/
+.venv/
+backend/venv/
+backend/.env
 
-# OS Files
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# OS
 .DS_Store
 Thumbs.db
