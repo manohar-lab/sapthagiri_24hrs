@@ -360,23 +360,108 @@ def open_app(app_name: str) -> str:
         logger.error(f"App launch failed: {e}")
         return f"Failed to launch app '{app_name}': {e}"
 
+def find_file(file_name: str, search_path: str = None) -> str:
+    """
+    Searches for a file by name on the PC, starting from common user directories.
+    Returns the full path if found, or a helpful message if not found.
+    """
+    import fnmatch
+
+    # Common directories to search
+    home = os.path.expanduser("~")
+    search_dirs = [
+        os.path.join(home, "Desktop"),
+        os.path.join(home, "Documents"),
+        os.path.join(home, "Downloads"),
+        os.path.join(home, "Pictures"),
+        os.path.join(home, "Videos"),
+        os.path.join(home, "Music"),
+        home,
+    ]
+    if search_path and os.path.isdir(search_path):
+        search_dirs.insert(0, search_path)
+
+    found = []
+    for directory in search_dirs:
+        try:
+            for root, dirs, files in os.walk(directory):
+                # Skip hidden/system folders
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                for fname in files:
+                    if fnmatch.fnmatch(fname.lower(), file_name.lower()):
+                        found.append(os.path.join(root, fname))
+                        if len(found) >= 5:  # Limit results
+                            break
+                if len(found) >= 5:
+                    break
+        except PermissionError:
+            continue
+        if found:
+            break
+
+    if not found:
+        return f"Could not find '{file_name}' in common folders (Desktop, Documents, Downloads, Pictures, Videos). Please provide the full path."
+    if len(found) == 1:
+        return f"Found file: {found[0]}"
+    result = f"Found {len(found)} files named '{file_name}':\n"
+    result += "\n".join(f"  {i+1}. {p}" for i, p in enumerate(found))
+    return result
+
+
 def open_file(path: str) -> str:
-    """Opens a specific file or folder path."""
+    """
+    Opens a file or folder. If only a filename is given (no directory separator),
+    searches common user directories automatically before opening.
+    """
+    # If it looks like just a filename (no path separators), search for it first
+    if os.sep not in path and '/' not in path:
+        home = os.path.expanduser("~")
+        search_dirs = [
+            os.path.join(home, "Desktop"),
+            os.path.join(home, "Documents"),
+            os.path.join(home, "Downloads"),
+            os.path.join(home, "Pictures"),
+            os.path.join(home, "Videos"),
+            os.path.join(home, "Music"),
+            home,
+        ]
+        import fnmatch
+        found_path = None
+        for directory in search_dirs:
+            try:
+                for root, dirs, files in os.walk(directory):
+                    dirs[:] = [d for d in dirs if not d.startswith('.')]
+                    for fname in files:
+                        if fnmatch.fnmatch(fname.lower(), path.lower()):
+                            found_path = os.path.join(root, fname)
+                            break
+                    if found_path:
+                        break
+            except PermissionError:
+                continue
+            if found_path:
+                break
+
+        if not found_path:
+            return f"Could not find '{path}' in Desktop, Documents, Downloads, Pictures, Videos or home folder. Please provide the full path."
+        path = found_path
+
+    abs_path = os.path.abspath(path)
+    if not os.path.exists(abs_path):
+        return f"Error: The path '{abs_path}' does not exist."
+
     try:
-        import os
-        import platform
-        abs_path = os.path.abspath(path)
-        if not os.path.exists(abs_path):
-            return f"Error: The path '{path}' does not exist."
-            
         if platform.system().lower() == "windows":
             os.startfile(abs_path)
+        elif platform.system().lower() == "darwin":
+            subprocess.Popen(["open", abs_path])
         else:
-            subprocess.Popen(["open" if platform.system().lower() == "darwin" else "xdg-open", abs_path])
-            
-        return f"Opened file/folder: {abs_path}"
+            subprocess.Popen(["xdg-open", abs_path])
+        logger.info(f"Opened file: {abs_path}")
+        return f"Opened: {abs_path}"
     except Exception as e:
-        return f"Failed to open file: {e}"
+        return f"Failed to open file '{abs_path}': {e}"
+
 
 
 def close_app(app_name: str, confirmed: bool = False) -> str:
@@ -719,6 +804,7 @@ AVAILABLE_TOOLS = {
     "control_volume": control_volume,
     "open_app": open_app,
     "open_file": open_file,
+    "find_file": find_file,
     "close_app": close_app,
     "type_text": type_text,
     "press_keys": press_keys,

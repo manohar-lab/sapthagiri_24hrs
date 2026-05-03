@@ -306,6 +306,34 @@ class AgentController:
             "6. For general knowledge questions (like the time), conversational chitchat, or asking for facts, DO NOT use any tools. Answer directly in natural language."
         )
 
+        # Structured intent-parsing prompt (returns strict JSON only)
+        self.intent_prompt = (
+            "You are an AI system controller that converts user commands into structured JSON actions for execution.\n\n"
+            "Your job is to:\n"
+            "1. Understand the user's intent\n"
+            "2. Extract key entities (app name, file name, path, message, etc.)\n"
+            "3. Return a STRICT JSON response (no explanation, no extra text)\n\n"
+            "SUPPORTED ACTION TYPES:\n"
+            "1. open_app\n2. open_website\n3. find_file\n4. open_file\n"
+            "5. system_control (volume, brightness, etc.)\n"
+            "6. send_message\n7. search_web\n8. unknown\n\n"
+            "JSON FORMAT:\n"
+            "{\"action\": \"<action_type>\", \"parameters\": {\"app_name\": \"\", \"url\": \"\", "
+            "\"file_name\": \"\", \"search_path\": \"\", \"message\": \"\", \"recipient\": \"\", "
+            "\"value\": \"\", \"query\": \"\"}}\n\n"
+            "RULES:\n"
+            "- Always return valid JSON only\n"
+            "- Do not include explanations\n"
+            "- If information is missing, leave fields as empty string \"\"\n"
+            "- If unsure, set action = \"unknown\"\n"
+            "- Normalize paths (e.g., 'C drive' → 'C:\\\\')\n"
+            "- Extract closest possible meaning from user input\n"
+            "- Prefer file search over navigation (never simulate clicks)\n"
+            "- If user says 'open YouTube', treat as open_website with URL\n"
+            "- If user says 'find' or 'get', use find_file\n"
+            "- If user says 'open file', use open_file\n"
+        )
+
     # -- Filler phrases -------------------------------------------------------
 
     def get_filler(self, user_text: str) -> str:
@@ -327,6 +355,88 @@ class AgentController:
         if "name" in t or "remember" in t:
             return "Got it."
         return ""
+
+    # -- Intent parser (JSON structured output) --------------------------------
+
+    async def _parse_intent(self, user_text: str) -> dict | None:
+        """
+        Uses a dedicated LLM call to parse the user command into a strict JSON
+        action object. Returns the parsed dict, or None if it fails / is 'unknown'.
+        """
+        if not self.client:
+            return None
+        try:
+            resp = await self.client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": self.intent_prompt},
+                    {"role": "user", "content": user_text},
+                ],
+                temperature=0.0,
+                max_tokens=256,
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            # Strip markdown code fences if present
+            raw = re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = re.sub(r'\s*```$', '', raw).strip()
+            parsed = json.loads(raw)
+            if parsed.get("action") and parsed["action"] != "unknown":
+                return parsed
+        except Exception as e:
+            logger.debug(f"[INTENT_PARSE] Failed: {e}")
+        return None
+
+    def _dispatch_intent(self, intent: dict, session_id: str, permissions: dict) -> str | None:
+        """
+        Maps a parsed JSON intent to a concrete tool call.
+        Returns a result string if handled, else None.
+        """
+        action = intent.get("action", "unknown")
+        params = intent.get("parameters", {})
+
+        if action == "open_app":
+            app = params.get("app_name", "")
+            if app and "open_app" in AVAILABLE_TOOLS:
+                return _execute_tool("open_app", {"app_name": app}, session_id, self.memory, permissions)
+
+        elif action == "open_website":
+            url = params.get("url", "") or params.get("app_name", "")
+            if url and "open_browser" in AVAILABLE_TOOLS:
+                return _execute_tool("open_browser", {"query": url}, session_id, self.memory, permissions)
+
+        elif action == "search_web":
+            query = params.get("query", "")
+            site = params.get("app_name", "")  # e.g. "youtube"
+            if query and site and "search_on_site" in AVAILABLE_TOOLS:
+                return _execute_tool("search_on_site", {"site": site, "query": query}, session_id, self.memory, permissions)
+            elif query and "search_on_site" in AVAILABLE_TOOLS:
+                return _execute_tool("search_on_site", {"site": "google", "query": query}, session_id, self.memory, permissions)
+
+        elif action == "find_file":
+            fname = params.get("file_name", "")
+            path = params.get("search_path", "C:\\")
+            if fname and "find_file" in AVAILABLE_TOOLS:
+                return _execute_tool("find_file", {"file_name": fname, "search_path": path}, session_id, self.memory, permissions)
+
+        elif action == "open_file":
+            fname = params.get("file_name", "")
+            if fname and "open_file" in AVAILABLE_TOOLS:
+                return _execute_tool("open_file", {"path": fname}, session_id, self.memory, permissions)
+
+        elif action == "send_message":
+            recipient = params.get("recipient", "")
+            message = params.get("message", "")
+            if recipient and message and "send_whatsapp" in AVAILABLE_TOOLS:
+                return _execute_tool("send_whatsapp", {"contact": recipient, "message": message}, session_id, self.memory, permissions)
+
+        elif action == "system_control":
+            query = params.get("query", "").lower()
+            value = params.get("value", "")
+            if "volume" in query and "control_volume" in AVAILABLE_TOOLS:
+                direction = "up" if any(w in query for w in ["increase", "up", "raise"]) else "down"
+                return _execute_tool("control_volume", {"action": direction, "value": value}, session_id, self.memory, permissions)
+
+        return None
 
     # -- Main message handler -------------------------------------------------
 
@@ -368,7 +478,22 @@ class AgentController:
         if not self.client:
             return "API ERROR: Your Groq API key is missing. Please add a valid GROQ_API_KEY to your .env file."
 
-        # ---- LLM path ----
+        # ---- Structured JSON intent parsing (mid-tier router) ----
+        permissions = self.memory.get_permissions(session_id)
+        intent = await self._parse_intent(user_text)
+        if intent:
+            logger.info(f"[INTENT_ROUTER] Parsed intent: {intent}")
+            intent_result = self._dispatch_intent(intent, session_id, permissions)
+            if intent_result is not None:
+                if isinstance(intent_result, str) and intent_result.startswith("ACTION_NEEDS_CONFIRMATION:"):
+                    ask = intent_result.replace("ACTION_NEEDS_CONFIRMATION:", "").strip()
+                    self.memory.set_pending_action(session_id, intent.get("action", ""), {})
+                    self.memory.add_message(session_id, "assistant", ask)
+                    return ask
+                self.memory.add_message(session_id, "assistant", intent_result)
+                return intent_result
+
+        # ---- Full LLM + tool-calling path ----
         preferences = self.memory.get_preferences(session_id)
         pref_context = (
             "User Preferences:\n" + "\n".join(f"{k}: {v}" for k, v in preferences.items())
